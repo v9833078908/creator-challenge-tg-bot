@@ -28,7 +28,8 @@ def upgrade() -> None:
     op.execute(
         "INSERT INTO membership_periods (stream_id, participant_id, joined_at, left_at) "
         "SELECT stream_id, id, joined_at, "
-        "CASE WHEN status IN ('left', 'kicked') THEN left_at ELSE NULL END "
+        "CASE WHEN status IN ('left', 'kicked') "
+        "THEN COALESCE(left_at, joined_at) ELSE NULL END "
         "FROM participants WHERE joined_at IS NOT NULL"
     )
     op.create_table(

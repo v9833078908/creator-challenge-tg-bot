@@ -82,10 +82,16 @@ async def send_digest_if_needed(bot: Bot, stream_id: int, day) -> None:
 
 
 async def pending_close_dates(session, stream_id: int, today) -> list:
+    stream = await repo.get_stream(session, stream_id)
+    if stream is None:
+        return []
     last_closed = (await session.execute(select(func.max(DailyClosure.report_date)).where(
         DailyClosure.stream_id == stream_id
     ))).scalar_one()
-    first = (last_closed + timedelta(days=1)) if last_closed else today - timedelta(days=1)
+    first = (
+        last_closed + timedelta(days=1)
+        if last_closed else max(today - timedelta(days=1), digest.today_local(stream, stream.created_at))
+    )
     return [first + timedelta(days=i) for i in range(max(0, (today - first).days))]
 
 

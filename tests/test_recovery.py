@@ -36,6 +36,14 @@ async def test_recovery_dates_resume_after_last_closed_day(session, stream):
 
 
 async def test_first_recovery_closes_yesterday_only(session, stream):
+    stream.created_at = datetime(2026, 9, 20)
+    await session.commit()
     assert await jobs.pending_close_dates(session, stream.id, date(2026, 9, 23)) == [
         date(2026, 9, 22),
     ]
+
+
+async def test_new_stream_does_not_receive_yesterdays_digest(session, stream):
+    stream.created_at = datetime(2026, 9, 23, 8)
+    await session.commit()
+    assert await jobs.pending_close_dates(session, stream.id, date(2026, 9, 23)) == []
