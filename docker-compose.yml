@@ -1,0 +1,18 @@
+services:
+  bot:
+    build: .
+    image: creator-bot
+    container_name: creator-bot
+    env_file: .env
+    volumes:
+      - bot-data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bot-data:
+    name: creator-bot-data
