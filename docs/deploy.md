@@ -143,7 +143,7 @@ Telegram-бота одновременно должен работать тол�
    `ssh creator-hero-vps 'cd ~/coding-projects/creator-hero-bot && docker compose build'`.
 4. Начните короткое переключение: остановите локального бота командой
    `docker compose stop bot`, затем сделайте финальную копию `./scripts/backup.sh`.
-5. Скопируйте полученный `.db` в `~/creator-hero-bot/backups/` на VPS. На сервере
+5. Скопируйте полученный `.db` в `~/coding-projects/creator-hero-bot/backups/` на VPS. На сервере
    создайте volume `creator-bot-data` и восстановите файл командой
    `python -m bot.backup restore` внутри образа `creator-bot`.
 6. Запустите `docker compose up -d` на VPS. Проверьте `docker compose ps`,
