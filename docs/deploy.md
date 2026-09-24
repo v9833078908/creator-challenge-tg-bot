@@ -22,7 +22,7 @@ cd creator-hero-bot
 
 Вариант B — rsync с локальной машины (см. scripts/deploy.sh):
 ```bash
-./scripts/deploy.sh user@your-vps
+./scripts/deploy.sh user@your-vps --stage-only
 ```
 
 ## 3. Настройка
@@ -31,6 +31,16 @@ cd creator-hero-bot
 cd creator-hero-bot
 cp .env.example .env
 nano .env   # BOT_TOKEN от @BotFather, OWNER_TG_ID — ваш id (@userinfobot)
+```
+
+Адрес VPS, SSH-пользователь и путь к приватному ключу не относятся к `.env`
+бота. Их удобно сохранить локально в `~/.ssh/config` под алиасом, например
+`creator-vps`. На сервере `.env` содержит только настройки бота. При переносе
+существующей локальной конфигурации можно отправить её по SSH:
+
+```bash
+scp .env creator-vps:creator-hero-bot/.env
+ssh creator-vps 'chmod 600 ~/creator-hero-bot/.env'
 ```
 
 ## 4. Запуск
@@ -108,3 +118,25 @@ docker exec -it creator-bot sh    # зайти внутрь контейнера
 будет закрыт лишь этот день. Более ранние дни без истории бот не пересчитывает.
 После обновления история
 входов и выходов ведётся полностью.
+
+## Перенос действующего локального бота на VPS
+
+Если локальная группа уже привязана, перенесите и SQLite-базу. Для одного
+Telegram-бота одновременно должен работать только один polling-процесс.
+
+1. Подготовьте сервер: установите Docker с Compose и проверьте SSH-доступ.
+2. Передайте код без запуска: `./scripts/deploy.sh creator-vps --stage-only`.
+   Скрипт сохраняет серверные `.env` и `backups/` при следующих обновлениях.
+3. Передайте `.env` через `scp`, как показано выше, и соберите образ на сервере:
+   `ssh creator-vps 'cd ~/creator-hero-bot && docker compose build'`.
+4. Начните короткое переключение: остановите локального бота командой
+   `docker compose stop bot`, затем сделайте финальную копию `./scripts/backup.sh`.
+5. Скопируйте полученный `.db` в `~/creator-hero-bot/backups/` на VPS. На сервере
+   создайте volume `creator-bot-data` и восстановите файл командой
+   `python -m bot.backup restore` внутри образа `creator-bot`.
+6. Запустите `docker compose up -d` на VPS. Проверьте `docker compose ps`,
+   `/stats` у бота и существующий поток. Если запуск не удался, остановите
+   контейнер на VPS и снова запустите локальный `docker compose up -d bot`.
+
+Сообщения, отправленные во время переключения, Telegram хранит до запуска
+polling на VPS; бот обрабатывает их перед восстановлением расписания.
