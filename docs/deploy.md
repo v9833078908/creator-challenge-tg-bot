@@ -2,6 +2,18 @@
 
 Целевая конфигурация: любой Ubuntu 22.04/24.04 VPS (хватит 1 vCPU / 1 GB RAM), Docker + Docker Compose plugin. Боту не нужен домен, SSL и открытые порты — исходящий long polling к api.telegram.org.
 
+## Текущий сервер
+
+- SSH-алиас на рабочем компьютере: `creator-hero-vps` (пользователь `ubuntu`, порт `2222`).
+- Каталог проекта: `/home/ubuntu/coding-projects/creator-hero-bot`, рядом с `crossposting-service` и `doctor_council_app`.
+- Контейнер: `creator-bot`; Docker volume с БД: `creator-bot-data`.
+- Ежедневный серверный бэкап: 01:00 UTC / 04:00 МСК в `backups/`.
+- Команда обновления кода без запуска: `./scripts/deploy.sh creator-hero-vps coding-projects/creator-hero-bot --stage-only`.
+- После обновления кода: `ssh creator-hero-vps 'cd ~/coding-projects/creator-hero-bot && docker compose up -d --build'`.
+- Забрать проверяемую копию БД на рабочий компьютер: `./scripts/backup.sh creator-hero-vps`.
+
+SSH-ключ и токен бота в Git не хранятся. Серверный `.env` находится только в каталоге проекта с правами `600`.
+
 ## 1. Установка Docker на VPS (один раз)
 
 ```bash
@@ -22,7 +34,7 @@ cd creator-hero-bot
 
 Вариант B — rsync с локальной машины (см. scripts/deploy.sh):
 ```bash
-./scripts/deploy.sh user@your-vps --stage-only
+./scripts/deploy.sh creator-hero-vps coding-projects/creator-hero-bot --stage-only
 ```
 
 ## 3. Настройка
@@ -35,12 +47,12 @@ nano .env   # BOT_TOKEN от @BotFather, OWNER_TG_ID — ваш id (@userinfobot
 
 Адрес VPS, SSH-пользователь и путь к приватному ключу не относятся к `.env`
 бота. Их удобно сохранить локально в `~/.ssh/config` под алиасом, например
-`creator-vps`. На сервере `.env` содержит только настройки бота. При переносе
+`creator-hero-vps`. На сервере `.env` содержит только настройки бота. При переносе
 существующей локальной конфигурации можно отправить её по SSH:
 
 ```bash
-scp .env creator-vps:creator-hero-bot/.env
-ssh creator-vps 'chmod 600 ~/creator-hero-bot/.env'
+scp .env creator-hero-vps:coding-projects/creator-hero-bot/.env
+ssh creator-hero-vps 'chmod 600 ~/coding-projects/creator-hero-bot/.env'
 ```
 
 ## 4. Запуск
@@ -125,10 +137,10 @@ docker exec -it creator-bot sh    # зайти внутрь контейнера
 Telegram-бота одновременно должен работать только один polling-процесс.
 
 1. Подготовьте сервер: установите Docker с Compose и проверьте SSH-доступ.
-2. Передайте код без запуска: `./scripts/deploy.sh creator-vps --stage-only`.
+2. Передайте код без запуска: `./scripts/deploy.sh creator-hero-vps coding-projects/creator-hero-bot --stage-only`.
    Скрипт сохраняет серверные `.env` и `backups/` при следующих обновлениях.
 3. Передайте `.env` через `scp`, как показано выше, и соберите образ на сервере:
-   `ssh creator-vps 'cd ~/creator-hero-bot && docker compose build'`.
+   `ssh creator-hero-vps 'cd ~/coding-projects/creator-hero-bot && docker compose build'`.
 4. Начните короткое переключение: остановите локального бота командой
    `docker compose stop bot`, затем сделайте финальную копию `./scripts/backup.sh`.
 5. Скопируйте полученный `.db` в `~/creator-hero-bot/backups/` на VPS. На сервере
