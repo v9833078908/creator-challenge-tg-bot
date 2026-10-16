@@ -3,10 +3,50 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
+!.env.*.example
 data/
+!bot/data/
+!bot/data/lesson-catalog.json
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite*
 .ruff_cache/
 .pytest_cache/
 backups/
+artifacts/
 .omx/
 *.egg-info/
+# Ключи и секреты (токены — в .env*)
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.p12
+*.pfx
+# Локальные логи и файлы ОС
+*.log
+.DS_Store
+# Сторонние исходные материалы и медиа (права не подтверждены)
+assets/audio/
+docs/content-sources/
+docs/supplement-sources/
+docs/lesson-content/
+# Операционные заметки и отчёты живого запуска — остаются локально
+docs/writefreely-deploy.md
+docs/course-rollout.md
+docs/delayed-first-lesson-rollout.md
+docs/public-hosting-verification.md
+docs/free-public-address-research.md
+docs/lesson-hosting-capacity.md
+docs/lesson-storage-research.md
+docs/ux-content-hero-audit.md
+docs/lesson-chain-proposal.md
+docs/plans/2026-10-*
+*independent-check.json
+docs/independent-rollout-check.json
+*live-check*.json
+*verification*.json

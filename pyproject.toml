@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "creator-hero-bot"
 version = "0.1.0"
 description = "Creator Hero — Telegram-бот ежедневного контент-челленджа"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "aiogram>=3.13",
@@ -15,6 +16,9 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "pydantic-settings>=2.5",
 ]
+
+[project.urls]
+Repository = "https://github.com/v9833078908/creator-challenge-tg-bot"
 
 [project.optional-dependencies]
 dev = [
@@ -37,3 +41,6 @@ line-length = 110
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["B008"]
+
+[tool.setuptools.package-data]
+bot = ["data/lesson-catalog.json"]

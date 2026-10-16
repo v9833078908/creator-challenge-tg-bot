@@ -10,10 +10,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -35,6 +37,7 @@ class ParticipantStatus(str, enum.Enum):
     ACTIVE = "active"  # в чате, обязан сдавать отчёты
     LEFT = "left"  # сам вышел — пауза без новых штрафов
     KICKED = "kicked"  # кикнут ботом за просроченный штраф
+    REVOKED = "revoked"  # доступ отозван, привязка ID и учебный прогресс сохранены
 
 
 class PenaltyStatus(str, enum.Enum):
@@ -102,6 +105,10 @@ class Penalty(Base):
             "stream_id", "participant_id", "issued_for_date", "reason",
             name="uq_penalty_per_day_reason",
         ),
+        Index(
+            "uq_one_open_penalty", "stream_id", "participant_id", unique=True,
+            sqlite_where=text("status = 'open'"), postgresql_where=text("status = 'open'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -151,3 +158,34 @@ class DailyClosure(Base):
     report_date: Mapped[date] = mapped_column(Date, primary_key=True)
     closed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     digest_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CourseRun(Base):
+    """Personal opt-in from an approved participant's private /start."""
+
+    __tablename__ = "course_runs"
+
+    participant_id: Mapped[int] = mapped_column(
+        ForeignKey("participants.id", ondelete="CASCADE"), primary_key=True,
+    )
+    stream_id: Mapped[int] = mapped_column(ForeignKey("streams.id"), index=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime)
+    first_delivery_date: Mapped[date] = mapped_column(Date)
+
+
+class LessonDelivery(Base):
+    """Personal durable claim; uncertain Telegram outcomes require resolution."""
+
+    __tablename__ = "lesson_deliveries"
+
+    participant_id: Mapped[int] = mapped_column(
+        ForeignKey("participants.id", ondelete="CASCADE"), primary_key=True,
+    )
+    lesson_day: Mapped[int] = mapped_column(Integer, primary_key=True)
+    stream_id: Mapped[int] = mapped_column(ForeignKey("streams.id"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    owner_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

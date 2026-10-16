@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     penalty_amount_rub: int = 500
     penalty_grace_hours: int = 24
     digest_time: str = "00:00"  # дайджест + выставление штрафов
-    report_reminder_time: str = "21:00"  # напоминание несдавшим
+    report_reminder_time: str = "18:00"  # напоминание несдавшим
     penalty_reminder_time: str = "20:00"  # напоминание штрафникам
     kick_time: str = "00:05"  # кик просрочивших штрафы
 

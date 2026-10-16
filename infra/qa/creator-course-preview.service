@@ -1,0 +1,18 @@
+[Unit]
+Description=Finite owner-only Creator Hero course preview
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/creator-course-preview
+User=root
+UMask=0077
+Restart=no
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/creator-course-preview
+ReadOnlyPaths=/var/lib/docker/volumes/creator-bot-data
+TimeoutStopSec=35

@@ -6,6 +6,7 @@ from bot.db import repo
 from bot.db.models import ParticipantStatus
 from bot.handlers import admin, group
 from bot.services import texts
+from tests.test_owner_handlers import RoleBot
 
 
 async def test_unknown_join_notifies_owner_without_removing_user(session, stream, monkeypatch):
@@ -13,7 +14,7 @@ async def test_unknown_join_notifies_owner_without_removing_user(session, stream
     monkeypatch.setattr(group, "SessionFactory", lambda: session)
     calls = []
 
-    class Bot:
+    class Bot(RoleBot):
         async def send_message(self, chat_id, text):
             calls.append((chat_id, text))
 
@@ -21,7 +22,13 @@ async def test_unknown_join_notifies_owner_without_removing_user(session, stream
             raise AssertionError("Unknown friends must not be auto-kicked")
 
     user = SimpleNamespace(id=777, username="guest", full_name="Гость", is_bot=False)
+    greetings = []
+
+    async def answer(text):
+        greetings.append(text)
+
     message = SimpleNamespace(
+        answer=answer,
         chat=SimpleNamespace(id=stream.chat_id, title=stream.title),
         new_chat_members=[user],
         date=datetime.now(timezone.utc),
@@ -30,6 +37,12 @@ async def test_unknown_join_notifies_owner_without_removing_user(session, stream
     assert len(calls) == 1
     assert calls[0][0] == settings.owner_tg_id
     assert "Гость" in calls[0][1]
+    assert len(greetings) == 1
+    assert "пока нет в списке участников" in greetings[0]
+    assert "#пост" not in greetings[0]
+    assert "#штраф" not in greetings[0]
+    assert "с возвращением" not in greetings[0]
+    assert await repo.get_participant_by_tg_id(session, stream.id, user.id) is None
 
 
 async def test_failed_unban_keeps_kicked_status(session, stream, monkeypatch):

@@ -1,6 +1,7 @@
 """Все тексты бота. Свои формулировки, тон — игровой, на «ты» (как у оригинала, но не копипаст)."""
 
 import html
+import random
 
 from bot.config import settings
 
@@ -35,16 +36,15 @@ def start_already_active(full_name: str, username: str | None, invite_link: str)
 def start_refused() -> str:
     return (
         "Челлендж закрытый, и тебя пока нет в списке участников 🙈\n"
-        "Попроси того, кто тебя позвал, добавить твой @username — и возвращайся."
+        "Попроси организатора челленджа добавить твой @username — и возвращайся."
     )
 
 
 def start_kicked() -> str:
     return (
-        "Ты вылетел из челленджа за неотработанный штраф 🥲\n"
-        "Если это недоразумение — попроси организатора вернуть тебя, и я выдам ссылку заново."
+        "Сейчас доступ к челленджу приостановлен. Для возврата свяжись с организатором — "
+        "он поможет вернуться в игру. Прогресс уроков сохранён."
     )
-
 
 def start_no_stream() -> str:
     return "Челлендж ещё не настроен. Организатор, выполни /init_stream в группе — и я оживу."
@@ -53,19 +53,30 @@ def start_no_stream() -> str:
 # --- Группа: вход/выход ----------------------------------------------------
 
 
-def welcome_joined(full_name: str, username: str | None) -> str:
-    return (
-        f"👑 {_name(full_name, username)} с нами! "
-        f"Теперь — по посту в день до {settings.report_deadline} с хештегом #пост. "
-        f"Не подведи своё будущее «я» 😎"
-    )
+def welcome_joined(full_name: str, username: str | None, *, first_join: bool = False) -> str:
+    name = html.escape(f"@{username}") if username else _name(full_name, username)
+    if first_join:
+        return (
+            f"Да это же {name}, привет! "
+            "Представься с хештегом #обомне и напиши свою #цель "
+            "чтобы другие участники познакомились с тобой 👋"
+        )
+    return f"Оооо, да это же {name}! С возвращением!"
 
 
 def welcome_back_with_penalties(full_name: str, username: str | None, count: int) -> str:
     return (
-        f"👑 {_name(full_name, username)} вернулся! С возвращением 🫶\n"
-        f"Только учти: на тебе {count} неотработанных штраф(а) — у тебя "
+        f"{welcome_joined(full_name, username)}\n"
+        "У тебя остался неотработанный штраф — у тебя "
         f"{settings.penalty_grace_hours} часа, чтобы закинуть #штраф, иначе вылет."
+    )
+
+
+def welcome_guest(full_name: str, username: str | None) -> str:
+    return (
+        f"👋 {_name(full_name, username)}, привет! Добро пожаловать в чат Creator Hero. "
+        "Тебя пока нет в списке участников — для подключения к челленджу обратись к организатору. "
+        "Пока я не учитываю твои отчёты и не начисляю штрафы 🫶"
     )
 
 
@@ -107,40 +118,44 @@ def no_stream_admin() -> str:
 
 
 def approve_usage() -> str:
-    return "Формат: /approve @username"
+    return "Формат: /approve @username или /approve TelegramID (уже привязанного участника)."
+
+
+def _owner_target(value: str) -> str:
+    return f"Telegram ID {value}" if value.isdecimal() else f"@{value}"
 
 
 def approve_ok(username: str) -> str:
     return (
-        f"✅ @{username} в списке. Пусть напишет мне в личку /start — выдам ссылку на чат."
+        f"✅ {_owner_target(username)} в списке. Пусть напишет мне в личку /start — выдам ссылку на чат."
     )
 
 
 def approve_back(username: str) -> str:
     return (
-        f"✅ @{username} возвращён в челлендж: бан снят, штрафы обнулены. "
+        f"✅ {_owner_target(username)} возвращён в челлендж: бан снят, штрафы обнулены. "
         f"Пусть напишет мне /start — выдам ссылку."
     )
 
 
 def unban_failed(username: str) -> str:
-    return f"Не смог снять бан с @{username}. Проверь мои права в группе и повтори /approve."
+    return f"Не смог снять бан с {_owner_target(username)}. Проверь мои права в группе и повтори /approve."
 
 
 def approve_already(username: str) -> str:
-    return f"@{username} уже в списке/в игре — ничего не менял."
+    return f"{_owner_target(username)} уже в списке/в игре — ничего не менял."
 
 
 def revoke_usage() -> str:
-    return "Формат: /revoke @username"
+    return "Формат: /revoke @username или /revoke TelegramID (уже привязанного участника)."
 
 
 def revoke_ok(username: str) -> str:
-    return f"🗑 @{username} убран из списка ожидания."
+    return f"🗑 {_owner_target(username)} убран из списка ожидания."
 
 
 def revoke_not_found(username: str) -> str:
-    return f"@{username} не найден в списке ожидания (или уже вступил в чат — таких не трогаю)."
+    return f"{_owner_target(username)} не найден в списке ожидания (или уже вступил в чат — таких не трогаю)."
 
 
 # --- Группа: отчёты #пост --------------------------------------------------
@@ -163,6 +178,8 @@ def _join_names(people) -> str:
 
 
 def report_accepted(seq: int, total: int, emoji: str) -> str:
+    if random.randrange(5) == 0:
+        return f"вау, справилось {seq} из {total} героев! ⚡️"
     return f"№{seq} из {total} {emoji}"
 
 
@@ -203,8 +220,7 @@ def report_late(deadline: str) -> str:
 
 def reminder_report(missing) -> str:
     return (
-        f"🔔 До дедлайна ({settings.report_deadline}) осталось совсем чуть-чуть! "
-        f"Жду #пост от {_join_names(missing)}.\n"
+        f"⏰ Тик-так! Сегодня до {settings.report_deadline} жду #пост от {_join_names(missing)}.\n"
         "Если отправлял, а я не понял — кинь ещё раз с хештегом, чтобы точно засчитал!"
     )
 
@@ -219,9 +235,9 @@ def digest(for_date, total: int, reported, penalized) -> str:
     else:
         lines.append("✅ Написали пост — 0. Тихий день 🌫")
     if penalized:
-        lines.append(f"💥 Штраф — {len(penalized)}: {_join_names(penalized)}")
+        lines.append(f"💥 Новых штрафов — {len(penalized)}: {_join_names(penalized)}")
     else:
-        lines.append("💥 Штраф — 0. Все молодцы, в моей электронной душе праздник ✨")
+        lines.append("💥 Новых штрафов — 0.")
     return "\n".join(lines)
 
 

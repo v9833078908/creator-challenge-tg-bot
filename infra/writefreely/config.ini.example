@@ -1,0 +1,34 @@
+[server]
+port = 8088
+bind = 127.0.0.1
+autocert = false
+templates_parent_dir = /opt/writefreely/current
+static_parent_dir = /opt/writefreely/current
+pages_parent_dir = /opt/writefreely/current
+keys_parent_dir = /var/lib/writefreely
+
+[database]
+type = sqlite3
+filename = /var/lib/writefreely/writefreely.db
+
+[app]
+site_name = Creator Hero
+site_description = Короткие уроки о текстах и канале. Один небольшой шаг в день — по желанию.
+host = https://lessons.example.com
+editor = pad
+single_user = true
+open_registration = false
+open_deletion = false
+private = false
+default_visibility = public
+max_blogs = 1
+federation = false
+public_stats = false
+monetization = false
+user_invites =
+local_timeline = false
+wf_modesty = true
+simple_nav = true
+webfonts = false
+update_checks = false
+disable_password_auth = false

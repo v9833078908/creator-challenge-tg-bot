@@ -1,0 +1,7 @@
+/* Creator Hero: keep wide reference tables inside the reading column. */
+#post-body table,
+#collection article table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}

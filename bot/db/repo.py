@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import (
@@ -55,7 +55,7 @@ async def get_participant_by_username(
 ) -> Participant | None:
     q = select(Participant).where(
         Participant.stream_id == stream_id,
-        Participant.username.ilike(username.lstrip("@")),
+        func.lower(Participant.username) == username.lstrip("@").lower(),
     )
     return (await session.execute(q)).scalar_one_or_none()
 
@@ -79,7 +79,11 @@ async def approve_participant(session: AsyncSession, stream_id: int, username: s
 
 async def revoke_participant(session: AsyncSession, participant: Participant) -> None:
     """Удалить из whitelist. Вызывающий проверяет, что участник ещё не вступил."""
-    await session.delete(participant)
+    # Keep a bound person's identity and progress: reapproval cannot restart course.
+    if participant.tg_user_id is not None:
+        participant.status = ParticipantStatus.REVOKED
+    else:
+        await session.delete(participant)
     await session.flush()
 
 
@@ -121,15 +125,14 @@ async def mark_kicked(session: AsyncSession, participant: Participant, when: dat
 async def extend_open_penalties(
     session: AsyncSession, participant_id: int, grace_hours: int
 ) -> int:
-    """Возврат из паузы: продлить дедлайн открытых (и просроченных в отсутствие) штрафов."""
+    """Возврат из паузы: продлить единственный открытый долг, не оживляя историю."""
     q = select(Penalty).where(
         Penalty.participant_id == participant_id,
-        Penalty.status.in_([PenaltyStatus.OPEN, PenaltyStatus.EXPIRED]),
+        Penalty.status == PenaltyStatus.OPEN,
     )
     penalties = (await session.execute(q)).scalars().all()
     new_due = utcnow() + timedelta(hours=grace_hours)
     for p in penalties:
-        p.status = PenaltyStatus.OPEN
         p.due_at = new_due
     await session.flush()
     return len(penalties)

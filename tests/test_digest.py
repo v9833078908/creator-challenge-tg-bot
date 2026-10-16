@@ -121,23 +121,24 @@ async def test_close_day_skips_left(session, stream):
 # --- #штраф -----------------------------------------------------------------
 
 
-async def test_pay_penalty_closes_all_open(session, stream):
+async def test_pay_penalty_closes_one_open_preserving_paid_history(session, stream):
     p = await _mk_active(session, stream, 1, "debtor")
     for i in range(2):
         session.add(Penalty(
             stream_id=stream.id, participant_id=p.id,
             issued_for_date=_yesterday(stream) - timedelta(days=i),
-            status=PenaltyStatus.OPEN, due_at=utcnow() + timedelta(hours=10),
+            status=PenaltyStatus.OPEN if i == 0 else PenaltyStatus.PAID,
+            due_at=utcnow() + timedelta(hours=10),
         ))
     await session.commit()
 
     out = await digest.pay_open_penalties(session, stream, tg_user_id=1, message_id=777)
-    assert out.kind == "paid" and out.count == 2
+    assert out.kind == "paid" and out.count == 1
 
     q = select(Penalty).where(Penalty.participant_id == p.id)
     for pen in (await session.execute(q)).scalars().all():
         assert pen.status == PenaltyStatus.PAID
-        assert pen.paid_message_id == 777
+        assert pen.paid_message_id == (777 if pen.issued_for_date == _yesterday(stream) else None)
 
 
 async def test_pay_penalty_none(session, stream):

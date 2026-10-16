@@ -18,6 +18,8 @@ fi
 
 echo "→ rsync $LOCAL_DIR → $REMOTE:$DIR"
 rsync -az --delete \
+  --include '/bot/data/' --include '/bot/data/lesson-catalog.json' \
+  --exclude '/bot/data/*' \
   --exclude '.venv' --exclude 'venv' --exclude '__pycache__' \
   --exclude '.git' --exclude '.env' --exclude 'data' \
   --exclude 'backups' --exclude '.omx' \

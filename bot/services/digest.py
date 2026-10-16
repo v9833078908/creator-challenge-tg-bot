@@ -25,16 +25,28 @@ def today_local(stream: Stream, now_utc: datetime) -> date:
     return now_utc.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(stream.timezone)).date()
 
 
-async def list_active(session: AsyncSession, stream_id: int) -> list[Participant]:
+def _exclude_users(query, exclude_tg_user_ids: frozenset[int]):
+    if exclude_tg_user_ids:
+        query = query.where(
+            Participant.tg_user_id.is_(None)
+            | Participant.tg_user_id.not_in(exclude_tg_user_ids)
+        )
+    return query
+
+
+async def list_active(
+    session: AsyncSession, stream_id: int, *, exclude_tg_user_ids: frozenset[int] = frozenset(),
+) -> list[Participant]:
     q = select(Participant).where(
         Participant.stream_id == stream_id,
         Participant.status == ParticipantStatus.ACTIVE,
     )
-    return list((await session.execute(q)).scalars().all())
+    return list((await session.execute(_exclude_users(q, exclude_tg_user_ids))).scalars().all())
 
 
 async def active_at_deadline(
-    session: AsyncSession, stream: Stream, day: date, report_deadline: str
+    session: AsyncSession, stream: Stream, day: date, report_deadline: str,
+    *, exclude_tg_user_ids: frozenset[int] = frozenset(),
 ) -> list[Participant]:
     hour, minute = map(int, report_deadline.split(":"))
     local_cutoff = datetime.combine(
@@ -51,7 +63,7 @@ async def active_at_deadline(
         )
         .distinct()
     )
-    return list((await session.execute(q)).scalars().all())
+    return list((await session.execute(_exclude_users(q, exclude_tg_user_ids))).scalars().all())
 
 
 async def _reporter_ids(session: AsyncSession, stream_id: int, day: date) -> set[int]:
@@ -62,10 +74,11 @@ async def _reporter_ids(session: AsyncSession, stream_id: int, day: date) -> set
 
 
 async def missing_reporters(
-    session: AsyncSession, stream: Stream, now_utc: datetime
+    session: AsyncSession, stream: Stream, now_utc: datetime,
+    *, exclude_tg_user_ids: frozenset[int] = frozenset(),
 ) -> list[Participant]:
-    """Кто из активных ещё не сдал #пост сегодня (для напоминания 21:00)."""
-    active = await list_active(session, stream.id)
+    """Кто из активных ещё не сдал #пост сегодня (для напоминания 18:00)."""
+    active = await list_active(session, stream.id, exclude_tg_user_ids=exclude_tg_user_ids)
     reported = await _reporter_ids(session, stream.id, today_local(stream, now_utc))
     return [p for p in active if p.id not in reported]
 
@@ -81,9 +94,12 @@ class CloseDayOutcome:
 async def close_day(
     session: AsyncSession, stream: Stream, for_date: date, grace_hours: int,
     report_deadline: str = "23:59",
+    *, exclude_tg_user_ids: frozenset[int] = frozenset(),
 ) -> CloseDayOutcome:
     """00:00: итоги дня + штрафы несдавшим. Идемпотентно (повторный прогон не дублирует)."""
-    active = await active_at_deadline(session, stream, for_date, report_deadline)
+    active = await active_at_deadline(
+        session, stream, for_date, report_deadline, exclude_tg_user_ids=exclude_tg_user_ids,
+    )
     reported_ids = await _reporter_ids(session, stream.id, for_date)
     reported = [p for p in active if p.id in reported_ids]
     missed = [p for p in active if p.id not in reported_ids]
@@ -94,12 +110,13 @@ async def close_day(
     penalized: list[Participant] = []
     for p in missed:
         q = select(Penalty).where(
+            Penalty.stream_id == stream.id,
             Penalty.participant_id == p.id,
-            Penalty.issued_for_date == for_date,
-            Penalty.reason == "missed_report",
+            (Penalty.status == PenaltyStatus.OPEN)
+            | ((Penalty.issued_for_date == for_date) & (Penalty.reason == "missed_report")),
         )
-        if (await session.execute(q)).scalar_one_or_none() is not None:
-            continue  # штраф за этот день уже есть
+        if (await session.execute(q.limit(1))).scalar_one_or_none() is not None:
+            continue  # существующий долг не суммируется и его срок не продлевается
         session.add(
             Penalty(
                 stream_id=stream.id,
@@ -117,9 +134,12 @@ async def close_day(
 
 
 async def day_outcome(
-    session: AsyncSession, stream: Stream, for_date: date, report_deadline: str
+    session: AsyncSession, stream: Stream, for_date: date, report_deadline: str,
+    *, exclude_tg_user_ids: frozenset[int] = frozenset(),
 ) -> CloseDayOutcome:
-    active = await active_at_deadline(session, stream, for_date, report_deadline)
+    active = await active_at_deadline(
+        session, stream, for_date, report_deadline, exclude_tg_user_ids=exclude_tg_user_ids,
+    )
     reported_ids = await _reporter_ids(session, stream.id, for_date)
     penalties = (await session.execute(select(Penalty.participant_id).where(
         Penalty.stream_id == stream.id,
@@ -134,7 +154,9 @@ async def day_outcome(
     )
 
 
-async def open_penalty_holders(session: AsyncSession, stream_id: int) -> list[Participant]:
+async def open_penalty_holders(
+    session: AsyncSession, stream_id: int, *, exclude_tg_user_ids: frozenset[int] = frozenset(),
+) -> list[Participant]:
     """Активные участники с неотработанными штрафами (напоминание 20:00)."""
     q = (
         select(Participant)
@@ -146,11 +168,12 @@ async def open_penalty_holders(session: AsyncSession, stream_id: int) -> list[Pa
         )
         .distinct()
     )
-    return list((await session.execute(q)).scalars().all())
+    return list((await session.execute(_exclude_users(q, exclude_tg_user_ids))).scalars().all())
 
 
 async def expired_penalty_debtors(
-    session: AsyncSession, stream_id: int, now_utc: datetime
+    session: AsyncSession, stream_id: int, now_utc: datetime,
+    *, exclude_tg_user_ids: frozenset[int] = frozenset(),
 ) -> list[Participant]:
     """Активные участники с просроченными штрафами (кик 00:05)."""
     q = (
@@ -164,7 +187,7 @@ async def expired_penalty_debtors(
         )
         .distinct()
     )
-    return list((await session.execute(q)).scalars().all())
+    return list((await session.execute(_exclude_users(q, exclude_tg_user_ids))).scalars().all())
 
 
 async def expire_penalties_and_mark_kicked(session: AsyncSession, participant: Participant) -> None:
@@ -218,20 +241,25 @@ class Stats:
     total_kicked: int
 
 
-async def collect_stats(session: AsyncSession, stream: Stream, now_utc: datetime) -> Stats:
+async def collect_stats(
+    session: AsyncSession, stream: Stream, now_utc: datetime,
+    *, exclude_tg_user_ids: frozenset[int] = frozenset(),
+) -> Stats:
     from bot.services import texts  # локальный импорт: избегаем цикла
 
-    active = await list_active(session, stream.id)
+    active = await list_active(session, stream.id, exclude_tg_user_ids=exclude_tg_user_ids)
     reported = await _reporter_ids(session, stream.id, today_local(stream, now_utc))
-    holders = await open_penalty_holders(session, stream.id)
+    holders = await open_penalty_holders(session, stream.id, exclude_tg_user_ids=exclude_tg_user_ids)
 
-    q = select(Penalty).where(Penalty.stream_id == stream.id, Penalty.status == PenaltyStatus.OPEN)
-    open_count = len((await session.execute(q)).scalars().all())
+    q = select(Penalty).join(Participant, Participant.id == Penalty.participant_id).where(
+        Penalty.stream_id == stream.id, Penalty.status == PenaltyStatus.OPEN,
+    )
+    open_count = len((await session.execute(_exclude_users(q, exclude_tg_user_ids))).scalars().all())
 
     q2 = select(Participant).where(
         Participant.stream_id == stream.id, Participant.status == ParticipantStatus.KICKED
     )
-    kicked = len((await session.execute(q2)).scalars().all())
+    kicked = len((await session.execute(_exclude_users(q2, exclude_tg_user_ids))).scalars().all())
 
     return Stats(
         total_active=len(active),

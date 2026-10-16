@@ -31,11 +31,18 @@ def local_date(stream: Stream, now_utc: datetime) -> date:
     return now_utc.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(stream.timezone)).date()
 
 
-async def _active_count(session: AsyncSession, stream_id: int) -> int:
+async def _active_count(
+    session: AsyncSession, stream_id: int, *, exclude_tg_user_ids: frozenset[int] = frozenset(),
+) -> int:
     q = select(Participant).where(
         Participant.stream_id == stream_id,
         Participant.status == ParticipantStatus.ACTIVE,
     )
+    if exclude_tg_user_ids:
+        q = q.where(
+            Participant.tg_user_id.is_(None)
+            | Participant.tg_user_id.not_in(exclude_tg_user_ids)
+        )
     return len((await session.execute(q)).scalars().all())
 
 
@@ -50,10 +57,11 @@ async def accept_report(
     min_chars: int,
     now_utc: datetime,
     report_deadline: str = "23:59",
+    exclude_tg_user_ids: frozenset[int] = frozenset(),
 ) -> ReportOutcome:
     """Приём #пост: валидация → идемпотентная запись → №k из N + эмодзи дня."""
     participant = await repo.get_participant_by_tg_id(session, stream.id, tg_user_id)
-    total = await _active_count(session, stream.id)
+    total = await _active_count(session, stream.id, exclude_tg_user_ids=exclude_tg_user_ids)
 
     if participant is None:
         return ReportOutcome(kind="not_participant", total=total)

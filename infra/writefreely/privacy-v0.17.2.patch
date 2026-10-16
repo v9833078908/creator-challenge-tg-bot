@@ -1,0 +1,405 @@
+diff --git a/account.go b/account.go
+index 9e6542f..387cd08 100644
+--- a/account.go
++++ b/account.go
+@@ -715,6 +715,7 @@ func viewMeAPI(app *App, w http.ResponseWriter, r *http.Request) error {
+ }
+ 
+ func viewMyPostsAPI(app *App, u *User, w http.ResponseWriter, r *http.Request) error {
++	viewResponseHeaders(w, true)
+ 	reqJSON := IsJSON(r)
+ 	if !reqJSON {
+ 		return ErrBadRequestedType
+@@ -762,6 +763,7 @@ func viewMyPostsAPI(app *App, u *User, w http.ResponseWriter, r *http.Request) e
+ }
+ 
+ func viewMyCollectionsAPI(app *App, u *User, w http.ResponseWriter, r *http.Request) error {
++	viewResponseHeaders(w, true)
+ 	reqJSON := IsJSON(r)
+ 	if !reqJSON {
+ 		return ErrBadRequestedType
+@@ -1033,6 +1035,7 @@ func updatePassphrase(app *App, w http.ResponseWriter, r *http.Request) error {
+ }
+ 
+ func viewStats(app *App, u *User, w http.ResponseWriter, r *http.Request) error {
++	viewResponseHeaders(w, true)
+ 	var c *Collection
+ 	var err error
+ 	vars := mux.Vars(r)
+diff --git a/collections.go b/collections.go
+index 215ffd8..071b820 100644
+--- a/collections.go
++++ b/collections.go
+@@ -589,7 +589,9 @@ func fetchCollection(app *App, w http.ResponseWriter, r *http.Request) error {
+ 	// Strip non-public information
+ 	res.Collection.ForPublic()
+ 
+-	return impart.WriteSuccess(w, res, http.StatusOK)
++	allowViews := canReadViewCounts(app, r, c.OwnerID)
++	viewResponseHeaders(w, allowViews)
++	return impart.WriteSuccess(w, collectionForViewer(res, allowViews), http.StatusOK)
+ }
+ 
+ // fetchCollectionPosts handles an API endpoint for retrieving a collection's
+@@ -636,7 +638,9 @@ func fetchCollectionPosts(app *App, w http.ResponseWriter, r *http.Request) erro
+ 		}
+ 	}
+ 
+-	return impart.WriteSuccess(w, coll, http.StatusOK)
++	allowViews := canReadViewCounts(app, r, c.OwnerID)
++	viewResponseHeaders(w, allowViews)
++	return impart.WriteSuccess(w, collectionForViewer(coll, allowViews), http.StatusOK)
+ }
+ 
+ type CollectionPage struct {
+@@ -1123,6 +1127,7 @@ func handleViewCollectionTag(app *App, w http.ResponseWriter, r *http.Request) e
+ 	displayPage.PinnedPosts, _ = app.db.GetPinnedPosts(coll.CollectionObj, isOwner)
+ 	displayPage.Monetization = app.db.GetCollectionAttribute(coll.ID, "monetization_pointer")
+ 
++	viewResponseHeaders(w, displayPage.IsOwner)
+ 	err = templates["collection-tags"].ExecuteTemplate(w, "collection-tags", displayPage)
+ 	if err != nil {
+ 		log.Error("Unable to render collection tag page: %v", err)
+diff --git a/posts.go b/posts.go
+index 796d727..4e6b29f 100644
+--- a/posts.go
++++ b/posts.go
+@@ -532,6 +532,7 @@ func handleViewPost(app *App, w http.ResponseWriter, r *http.Request) error {
+ 			return ErrPostNotFound
+ 		}
+ 		page.Silenced = silenced
++		viewResponseHeaders(w, page.IsOwner)
+ 		err = templates["post"].ExecuteTemplate(w, "post", page)
+ 		if err != nil {
+ 			log.Error("Post template execute error: %v", err)
+@@ -1192,17 +1193,34 @@ func fetchPost(app *App, w http.ResponseWriter, r *http.Request) error {
+ 		return impart.RenderActivityJSON(w, po, http.StatusOK)
+ 	}
+ 
+-	return impart.WriteSuccess(w, p, http.StatusOK)
++	allowViews := canReadViewCounts(app, r, p.OwnerID.Int64)
++	viewResponseHeaders(w, allowViews)
++	return impart.WriteSuccess(w, postForViewer(p, allowViews), http.StatusOK)
+ }
+ 
+ func fetchPostProperty(app *App, w http.ResponseWriter, r *http.Request) error {
+ 	vars := mux.Vars(r)
+-	p, err := app.db.GetPostProperty(vars["post"], 0, vars["property"])
++	var collectionID int64
++	if alias := vars["alias"]; alias != "" {
++		collection, err := app.db.GetCollection(alias)
++		if err != nil {
++			return err
++		}
++		collectionID = collection.ID
++	}
++	post, err := app.db.GetPost(vars["post"], collectionID)
+ 	if err != nil {
+ 		return err
+ 	}
+-
+-	return impart.WriteSuccess(w, p, http.StatusOK)
++	if !canReadViewCounts(app, r, post.OwnerID.Int64) {
++		return impart.HTTPError{http.StatusForbidden, "View counts are private."}
++	}
++	value, err := app.db.GetPostProperty(post.ID, 0, vars["property"])
++	if err != nil {
++		return err
++	}
++	viewResponseHeaders(w, true)
++	return impart.WriteSuccess(w, value, http.StatusOK)
+ }
+ 
+ func (p *Post) processPost() PublicPost {
+@@ -1689,6 +1707,7 @@ Are you sure it was ever here?` + shortCodeNoSig,
+ 		if app.cfg.App.Chorus {
+ 			postTmpl = "chorus-collection-post"
+ 		}
++		viewResponseHeaders(w, tp.IsOwner)
+ 		if err := templates[postTmpl].ExecuteTemplate(w, "post", tp); err != nil {
+ 			log.Error("Error in %s template: %v", postTmpl, err)
+ 		}
+diff --git a/read.go b/read.go
+index 9223377..e5bc083 100644
+--- a/read.go
++++ b/read.go
+@@ -140,7 +140,11 @@ func viewLocalTimelineAPI(app *App, w http.ResponseWriter, r *http.Request) erro
+ 		posts = append(posts, (*app.timeline.posts)[i])
+ 	}
+ 
+-	return impart.WriteSuccess(w, posts, http.StatusOK)
++	public := []interface{}{}
++	for i := range posts {
++		public = append(public, postForViewer(&posts[i], false))
++	}
++	return impart.WriteSuccess(w, public, http.StatusOK)
+ }
+ 
+ func viewLocalTimeline(app *App, w http.ResponseWriter, r *http.Request) error {
+diff --git a/templates/chorus-collection-post.tmpl b/templates/chorus-collection-post.tmpl
+index 468455c..f02b688 100644
+--- a/templates/chorus-collection-post.tmpl
++++ b/templates/chorus-collection-post.tmpl
+@@ -5,7 +5,7 @@
+ 
+ 		<title>{{.PlainDisplayTitle}} {{localhtml "title dash" .Language.String}} {{.Collection.DisplayTitle}}</title>
+ 		
+-		<link rel="stylesheet" type="text/css" href="/css/write.css" />
++		<link rel="stylesheet" type="text/css" href="/css/write.css?8633a7d0ed9c9c8ee5ff0" />
+ 		{{if .CustomCSS}}<link rel="stylesheet" type="text/css" href="/local/custom.css" />{{end}}
+ 		<link rel="shortcut icon" href="/favicon.ico" />
+ 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+@@ -13,7 +13,7 @@
+ 		<meta name="generator" content="WriteFreely">
+ 		<meta name="title" content="{{.PlainDisplayTitle}} {{localhtml "title dash" .Language.String}} {{if .Collection.Title}}{{.Collection.Title}}{{else}}{{.Collection.Alias}}{{end}}">
+ 		<meta name="description" content="{{.Summary}}">
+-		{{if gt .Views 1}}<meta name="twitter:label1" value="Views">
++		{{if and .IsOwner (gt .Views 1)}}<meta name="twitter:label1" value="Views">
+ 		<meta name="twitter:data1" value="{{largeNumFmt .Views}}">{{end}}
+ 		<meta name="author" content="{{.Collection.Title}}" />
+ 		<meta itemprop="description" content="{{.Summary}}">
+@@ -77,7 +77,7 @@ body#post header {
+ 			</nav>
+ 			<hr>
+ 			<nav><p style="font-size: 0.9em">{{localhtml "published with write.as" .Language.String}}</p></nav>
+-		</footer>
++		<p style="font-size:0.75em"><a href="/source/writefreely-creator-privacy1-source.tar.gz">Исходный код</a></p></footer>
+ 		{{ end }}
+ 	</body>
+ 	
+diff --git a/templates/collection-post.tmpl b/templates/collection-post.tmpl
+index 3d3132d..3d9ba86 100644
+--- a/templates/collection-post.tmpl
++++ b/templates/collection-post.tmpl
+@@ -5,7 +5,7 @@
+ 
+ 		<title>{{.PlainDisplayTitle}} {{localhtml "title dash" .Language.String}} {{.Collection.DisplayTitle}}</title>
+ 
+-		<link rel="stylesheet" type="text/css" href="/css/write.css" />
++		<link rel="stylesheet" type="text/css" href="/css/write.css?8633a7d0ed9c9c8ee5ff0" />
+ 		{{if .CustomCSS}}<link rel="stylesheet" type="text/css" href="/local/custom.css" />{{end}}
+ 		<link rel="shortcut icon" href="/favicon.ico" />
+ 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+@@ -14,7 +14,7 @@
+ 		<meta name="generator" content="WriteFreely">
+ 		<meta name="title" content="{{.PlainDisplayTitle}} {{localhtml "title dash" .Language.String}} {{if .Collection.Title}}{{.Collection.Title}}{{else}}{{.Collection.Alias}}{{end}}">
+ 		<meta name="description" content="{{.Summary}}">
+-		{{if gt .Views 1}}<meta name="twitter:label1" value="Views">
++		{{if and .IsOwner (gt .Views 1)}}<meta name="twitter:label1" value="Views">
+ 		<meta name="twitter:data1" value="{{largeNumFmt .Views}}">{{end}}
+ 		<meta name="author" content="{{.Collection.Title}}" />
+ 		<meta itemprop="description" content="{{.Summary}}">
+@@ -68,7 +68,7 @@
+ 		<article id="post-body" class="{{.Font}} h-entry {{if not .IsFound}}error-page{{end}}">{{if .IsScheduled}}<p class="badge">Scheduled</p>{{end}}{{if .Title.String}}<h2 id="title" class="p-name{{if and $.Collection.Format.ShowDates (not .IsPinned)}} dated{{end}}">{{.FormattedDisplayTitle}}</h2>{{end}}{{if and $.Collection.Format.ShowDates (not .IsPinned) .IsFound}}<time class="dt-published" datetime="{{.Created8601}}" pubdate itemprop="datePublished" content="{{.Created}}">{{.DisplayDate}}</time>{{end}}<div class="e-content">{{.HTMLContent}}</div></article>
+ 
+ 		{{ if .Collection.ShowFooterBranding }}
+-		<footer dir="ltr"><hr><nav><p style="font-size: 0.9em">{{localhtml "published with write.as" .Language.String}}</p></nav></footer>
++		<footer dir="ltr"><hr><nav><p style="font-size: 0.9em">{{localhtml "published with write.as" .Language.String}}</p></nav><p style="font-size:0.75em"><a href="/source/writefreely-creator-privacy1-source.tar.gz">Исходный код</a></p></footer>
+ 		{{ end }}
+ 	</body>
+ 
+diff --git a/templates/collection-tags.tmpl b/templates/collection-tags.tmpl
+index c8e8a12..dec8ab8 100644
+--- a/templates/collection-tags.tmpl
++++ b/templates/collection-tags.tmpl
+@@ -5,7 +5,7 @@
+ 
+ 		<title>{{.Tag}} &mdash; {{.Collection.DisplayTitle}}</title>
+ 		
+-		<link rel="stylesheet" type="text/css" href="/css/write.css" />
++		<link rel="stylesheet" type="text/css" href="/css/write.css?8633a7d0ed9c9c8ee5ff0" />
+ 		{{if .CustomCSS}}<link rel="stylesheet" type="text/css" href="/local/custom.css" />{{end}}
+ 		<link rel="shortcut icon" href="/favicon.ico" />
+ 		{{if not .Collection.IsPrivate}}<link rel="alternate" type="application/rss+xml" title="{{.Tag}} posts on {{.DisplayTitle}}" href="{{.CanonicalURL}}tag:{{.Tag}}/feed/" />{{end}}
+@@ -16,7 +16,7 @@
+ 		<meta name="description" content="{{.Tag}} posts on {{.Collection.DisplayTitle}}">
+ 		<meta name="application-name" content="Write.as">
+ 		<meta name="application-url" content="https://write.as">
+-		{{if gt .Views 1}}<meta name="twitter:label1" value="Views">
++		{{if and .IsOwner (gt .Views 1)}}<meta name="twitter:label1" value="Views">
+ 		<meta name="twitter:data1" value="{{largeNumFmt .Views}}">{{end}}
+ 		<meta itemprop="name" content="{{.Collection.DisplayTitle}}">
+ 		<meta itemprop="description" content="{{.Tag}} posts on {{.Collection.DisplayTitle}}">
+@@ -80,7 +80,7 @@
+ 			<nav>
+ 				<p style="font-size: 0.9em"><a class="home pubd" href="/">{{.SiteName}}</a> &middot; powered by <a style="margin-left:0" href="https://writefreely.org">writefreely</a></p>
+ 			</nav>
+-		</footer>
++		<p style="font-size:0.75em"><a href="/source/writefreely-creator-privacy1-source.tar.gz">Исходный код</a></p></footer>
+ 		{{ end }}
+ 	</body>
+ 	
+diff --git a/templates/post.tmpl b/templates/post.tmpl
+index ca1c1f9..e1f7a13 100644
+--- a/templates/post.tmpl
++++ b/templates/post.tmpl
+@@ -8,7 +8,7 @@
+ 		{{if .IsCode}}
+ 		<link rel="stylesheet" href="/css/lib/mono-blue.min.css">
+ 		{{end}}
+-		<link rel="stylesheet" type="text/css" href="/css/write.css" />
++		<link rel="stylesheet" type="text/css" href="/css/write.css?8633a7d0ed9c9c8ee5ff0" />
+ 		{{if .CustomCSS}}<link rel="stylesheet" type="text/css" href="/local/custom.css" />{{end}}
+ 		<link rel="shortcut icon" href="/favicon.ico" />
+ 		<link rel="canonical" href="{{.Host}}/{{if .SingleUser}}d/{{end}}{{.ID}}" />
+@@ -22,7 +22,7 @@
+ 		<meta name="twitter:card" content="{{if gt (len .Images) 0}}summary_large_image{{else}}summary{{end}}">
+ 		<meta name="twitter:title" content="{{if .Title}}{{.Title}}{{else}}{{.GenTitle}}{{end}}">
+ 		<meta name="twitter:description" content="{{.Description}}">
+-		{{if gt .Views 1}}<meta name="twitter:label1" value="Views">
++		{{if and .IsOwner (gt .Views 1)}}<meta name="twitter:label1" value="Views">
+ 		<meta name="twitter:data1" value="{{largeNumFmt .Views}}">{{end}}
+ 		{{if gt (len .Images) 0}}<meta name="twitter:image" content="{{index .Images 0}}">{{else}}<meta name="twitter:image" content="{{.Host}}/img/wf-sq.png">{{end}}
+ 		<meta property="og:title" content="{{if .Title}}{{.Title}}{{else}}{{.GenTitle}}{{end}}" />
+@@ -39,7 +39,7 @@
+ 		<header>
+ 			<h1 dir="{{.Direction}}"><a href="/">{{.SiteName}}</a></h1>
+ 			<nav>
+-				<span class="views{{if not .IsOwner}} owner-visible{{end}}" dir="ltr"><strong>{{largeNumFmt .Views}}</strong> {{pluralize "view" "views" .Views}}</span>
++				{{if .IsOwner}}<span class="views" dir="ltr"><strong>{{largeNumFmt .Views}}</strong> {{pluralize "view" "views" .Views}}</span>{{end}}
+ 				{{if .IsCode}}<a href="/{{.ID}}.txt" rel="noindex" dir="{{.Direction}}">View raw</a>{{end}}
+ 				{{ if .Username }}
+ 				{{if .IsOwner}}
+@@ -56,7 +56,7 @@
+ 		
+ 		<article class="{{.Font}} h-entry">{{if .Title}}<h2 id="title" class="p-name">{{.Title}}</h2>{{end}}{{ if .IsPlainText }}<p id="post-body" class="e-content">{{.Content}}</p>{{ else }}<div id="post-body" class="e-content">{{.HTMLContent}}</div>{{ end }}</article>
+ 
+-		<footer dir="ltr"><hr><nav><p style="font-size: 0.9em">{{localhtml "published with write.as" .Language}}</p></nav></footer>
++		<footer dir="ltr"><hr><nav><p style="font-size: 0.9em">{{localhtml "published with write.as" .Language}}</p></nav><p style="font-size:0.75em"><a href="/source/writefreely-creator-privacy1-source.tar.gz">Исходный код</a></p></footer>
+ 	</body>
+ 	
+ 	{{if .IsCode}}
+diff --git a/view_privacy.go b/view_privacy.go
+new file mode 100644
+index 0000000..5ffd25b
+--- /dev/null
++++ b/view_privacy.go
+@@ -0,0 +1,57 @@
++package writefreely
++
++import "net/http"
++
++// View counts are management data, including on otherwise public posts.
++func canReadViewCounts(app *App, r *http.Request, ownerID int64) bool {
++	if u := getUserSession(app, r); u != nil && (u.ID == ownerID || u.IsAdmin()) {
++		return true
++	}
++	u, err := app.db.GetAPIUser(r.Header.Get("Authorization"))
++	return err == nil && u != nil && (u.ID == ownerID || u.IsAdmin())
++}
++
++func viewResponseHeaders(w http.ResponseWriter, allowViews bool) {
++	w.Header().Add("Vary", "Cookie, Authorization")
++	if allowViews {
++		w.Header().Set("Cache-Control", "private, no-store")
++	}
++}
++
++func postForViewer(p *PublicPost, allowViews bool) interface{} {
++	if allowViews {
++		return p
++	}
++	// A shallow response wrapper does not mutate cached posts or stored text.
++	var collection interface{}
++	if p.Collection != nil {
++		collection = collectionForViewer(p.Collection, false)
++	}
++	return struct {
++		*PublicPost
++		Views      *int64      `json:"views,omitempty"`
++		Collection interface{} `json:"collection,omitempty"`
++	}{p, nil, collection}
++}
++
++func collectionForViewer(c *CollectionObj, allowViews bool) interface{} {
++	if allowViews {
++		return c
++	}
++	var posts *[]interface{}
++	if c.Posts != nil {
++		var wrapped []interface{}
++		if *c.Posts != nil {
++			wrapped = make([]interface{}, 0, len(*c.Posts))
++		}
++		for i := range *c.Posts {
++			wrapped = append(wrapped, postForViewer(&(*c.Posts)[i], false))
++		}
++		posts = &wrapped
++	}
++	return struct {
++		*CollectionObj
++		Views *int64         `json:"views,omitempty"`
++		Posts *[]interface{} `json:"posts,omitempty"`
++	}{c, nil, posts}
++}
+diff --git a/view_privacy_test.go b/view_privacy_test.go
+new file mode 100644
+index 0000000..1b63c05
+--- /dev/null
++++ b/view_privacy_test.go
+@@ -0,0 +1,65 @@
++package writefreely
++
++import (
++	"encoding/json"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestCreatorViewPrivacy(t *testing.T) {
++	p := &PublicPost{Post: &Post{Content: "7 columns and 123 views are article text"}, Views: 17}
++	coll := &CollectionObj{Collection: Collection{Views: 41}, Posts: &[]PublicPost{*p}}
++	for _, v := range []interface{}{postForViewer(p, false), collectionForViewer(coll, false)} {
++		b, err := json.Marshal(v)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if strings.Contains(string(b), `"views":`) {
++			t.Fatalf("public count leaked: %s", b)
++		}
++		if !strings.Contains(string(b), "123 views") {
++			t.Fatal("article text was changed")
++		}
++	}
++	if p.Views != 17 || coll.Views != 41 {
++		t.Fatal("shared source structs were mutated")
++	}
++	p.Views = 0
++	b, err := json.Marshal(postForViewer(p, true))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(string(b), `"views":0`) {
++		t.Fatalf("owner zero count disappeared: %s", b)
++	}
++}
++
++func TestCreatorViewPrivacyHeaders(t *testing.T) {
++	for _, allow := range []bool{false, true} {
++		w := httptest.NewRecorder()
++		viewResponseHeaders(w, allow)
++		if !strings.Contains(w.Header().Get("Vary"), "Cookie, Authorization") {
++			t.Fatal("missing auth Vary")
++		}
++		if allow && w.Header().Get("Cache-Control") != "private, no-store" {
++			t.Fatal("owner response cacheable")
++		}
++	}
++}
++
++func TestCreatorViewPrivacyCollectionShape(t *testing.T) {
++	empty := []PublicPost{}
++	var nullPosts []PublicPost
++	for _, posts := range []*[]PublicPost{nil, &empty, &nullPosts} {
++		c := &CollectionObj{Posts: posts}
++		original, _ := json.Marshal(c)
++		filtered, _ := json.Marshal(collectionForViewer(c, false))
++		var a, b map[string]json.RawMessage
++		json.Unmarshal(original, &a)
++		json.Unmarshal(filtered, &b)
++		if string(a["posts"]) != string(b["posts"]) {
++			t.Fatalf("posts shape changed: %s -> %s", original, filtered)
++		}
++	}
++}

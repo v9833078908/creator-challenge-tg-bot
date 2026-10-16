@@ -1,11 +1,14 @@
 """Онбординг и переходы статусов: whitelist → /start → вход → пауза → возврат → кик."""
 
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 from sqlalchemy import select
 
+from bot.config import settings
 from bot.db import repo
 from bot.db.models import ParticipantStatus, Penalty, PenaltyStatus, utcnow
+from bot.handlers import admin
 from bot.services import onboarding
 
 GRACE = 24
@@ -118,6 +121,7 @@ async def test_join_activates_approved(session, stream):
     )
     assert outcome.activated is True
     assert outcome.prev_status == ParticipantStatus.APPROVED
+    assert outcome.first_join is True
     assert outcome.participant.status == ParticipantStatus.ACTIVE
     assert outcome.participant.joined_at is not None
 
@@ -193,6 +197,7 @@ async def test_return_from_leave_extends_open_penalties(session, stream):
 
     assert outcome.activated is True
     assert outcome.restored_penalties == 1
+    assert outcome.first_join is False
     pen = (await session.execute(select(Penalty).where(Penalty.participant_id == p.id))).scalar_one()
     assert pen.status == PenaltyStatus.OPEN
     assert pen.due_at > utcnow() + timedelta(hours=GRACE - 1)
@@ -232,3 +237,67 @@ async def test_kicked_return_cancels_penalties(session, stream):
     assert outcome.activated is True
     pen = (await session.execute(select(Penalty).where(Penalty.participant_id == p.id))).scalar_one()
     assert pen.status == PenaltyStatus.CANCELLED
+
+
+async def test_username_underscore_is_literal_and_cannot_claim_similar_whitelist_name(session, stream):
+    person = await repo.approve_participant(session, stream.id, 'fooXbar')
+    await session.commit()
+    outcome = await onboarding.process_start(
+        session, tg_user_id=123456, username='foo_bar', full_name='Другой',
+    )
+    assert outcome.kind == 'refused'
+    assert person.tg_user_id is None
+
+
+async def test_revoked_bound_person_stays_guest_on_join_and_keeps_identity(session, stream):
+    person = await repo.approve_participant(session, stream.id, 'revokedfriend')
+    person.tg_user_id = 90909
+    await session.commit()
+    await repo.revoke_participant(session, person)
+    await session.commit()
+    assert person.status == ParticipantStatus.REVOKED
+    outcome = await onboarding.process_join(
+        session, stream=stream, tg_user_id=90909, username='revokedfriend',
+        full_name='Друг', grace_hours=GRACE,
+    )
+    assert outcome.activated is False and outcome.reason == 'unknown'
+    assert person.status == ParticipantStatus.REVOKED
+    assert person.tg_user_id == 90909
+    assert await repo.get_participant_by_username(session, stream.id, 'REVOKEDFRIEND') is person
+
+
+async def test_unbound_revoke_still_removes_waitlist_entry(session, stream):
+    person = await repo.approve_participant(session, stream.id, 'neverstarted')
+    await session.commit()
+    await repo.revoke_participant(session, person)
+    await session.commit()
+    assert await repo.get_participant_by_username(session, stream.id, 'neverstarted') is None
+
+
+async def test_reapproved_former_member_is_not_a_first_join(session, stream, monkeypatch):
+    participant = await _active_participant(session, stream, 114, "returning")
+    await repo.mark_kicked(session, participant)
+    await session.commit()
+    monkeypatch.setattr(settings, "owner_tg_id", 42)
+    monkeypatch.setattr(admin, "SessionFactory", lambda: session)
+    unbanned = []
+
+    class Bot:
+        async def unban_chat_member(self, chat_id, user_id):
+            unbanned.append((chat_id, user_id))
+
+    async def answer(text):
+        pass
+
+    await admin.approve(
+        SimpleNamespace(from_user=SimpleNamespace(id=42), answer=answer),
+        SimpleNamespace(args="@returning"), Bot(),
+    )
+    assert unbanned == [(stream.chat_id, 114)]
+    assert participant.status == ParticipantStatus.APPROVED
+    outcome = await onboarding.process_join(
+        session, stream=stream, tg_user_id=114, username="returning",
+        full_name="Вернулся", grace_hours=GRACE,
+    )
+    assert outcome.activated is True
+    assert outcome.first_join is False

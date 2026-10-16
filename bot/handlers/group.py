@@ -14,6 +14,7 @@ from bot.config import settings
 from bot.db import SessionFactory, repo
 from bot.db.models import ParticipantStatus
 from bot.services import challenge, digest, onboarding, reports, texts
+from bot.services.chat_roles import get_chat_owner_id
 
 logger = logging.getLogger(__name__)
 router = Router(name="group")
@@ -34,8 +35,14 @@ async def on_new_members(message: Message, bot: Bot) -> None:
         if stream is None:
             return
 
+        try:
+            owner_id = await get_chat_owner_id(bot, message.chat.id)
+        except Exception:
+            logger.exception("chat owner lookup failed for join in chat %s", message.chat.id)
+            return
+
         for user in message.new_chat_members:
-            if user.is_bot:
+            if user.is_bot or user.id == owner_id:
                 continue
             outcome = await onboarding.process_join(
                 session,
@@ -61,6 +68,7 @@ async def on_new_members(message: Message, bot: Bot) -> None:
                             )
                         except Exception as e:
                             logger.warning("unknown_join notification failed: %s", e)
+                    await message.answer(texts.welcome_guest(user.full_name, user.username))
                 continue
 
             if outcome.restored_penalties > 0:
@@ -70,7 +78,9 @@ async def on_new_members(message: Message, bot: Bot) -> None:
                     )
                 )
             else:
-                await message.answer(texts.welcome_joined(user.full_name, user.username))
+                await message.answer(
+                    texts.welcome_joined(user.full_name, user.username, first_join=outcome.first_join)
+                )
 
 
 @router.message(F.left_chat_member)
@@ -83,6 +93,14 @@ async def on_left_member(message: Message, bot: Bot) -> None:
     async with SessionFactory() as session:
         stream = await repo.get_stream_by_chat_id(session, message.chat.id)
         if stream is None:
+            return
+
+        try:
+            owner_id = await get_chat_owner_id(bot, message.chat.id)
+        except Exception:
+            logger.exception("chat owner lookup failed for leave in chat %s", message.chat.id)
+            return
+        if user.id == owner_id:
             return
 
         participant = await repo.get_participant_by_tg_id(session, stream.id, user.id)
@@ -126,19 +144,33 @@ def _is_forward(message: Message) -> bool:
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))
-async def on_group_message(message: Message) -> None:
+async def on_group_message(message: Message, bot: Bot) -> None:
     """Сообщения в группе: ловим #пост и #штраф. Остальное игнорируем."""
     content = message.text or message.caption
     if message.from_user is None or message.from_user.is_bot:
         return
 
-    if reports.has_post_hashtag(content):
-        await _handle_post(message, content)
-    elif reports.has_penalty_hashtag(content):
+    is_post = reports.has_post_hashtag(content)
+    is_penalty = reports.has_penalty_hashtag(content)
+    if not (is_post or is_penalty):
+        return
+    try:
+        owner_id = await get_chat_owner_id(bot, message.chat.id)
+    except Exception:
+        logger.exception("chat owner lookup failed for message in chat %s", message.chat.id)
+        return
+    if message.from_user.id == owner_id:
+        return
+
+    if is_post:
+        await _handle_post(message, content, exclude_tg_user_ids=frozenset({owner_id}))
+    elif is_penalty:
         await _handle_penalty(message)
 
 
-async def _handle_post(message: Message, content: str) -> None:
+async def _handle_post(
+    message: Message, content: str, *, exclude_tg_user_ids: frozenset[int] = frozenset(),
+) -> None:
     if message.from_user is None:
         return
 
@@ -157,6 +189,7 @@ async def _handle_post(message: Message, content: str) -> None:
             min_chars=settings.min_post_chars,
             now_utc=_event_utc(message),
             report_deadline=settings.report_deadline,
+            exclude_tg_user_ids=exclude_tg_user_ids,
         )
 
     match outcome.kind:

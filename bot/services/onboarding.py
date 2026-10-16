@@ -1,12 +1,13 @@
 """Игровая логика онбординга и переходов статусов. Чистые функции над БД — без Telegram API."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db import repo
-from bot.db.models import Participant, ParticipantStatus, Stream, utcnow
+from bot.db.models import CourseRun, Participant, ParticipantStatus, Stream, utcnow
+from bot.services import lessons
 
 
 @dataclass
@@ -14,6 +15,10 @@ class StartOutcome:
     kind: str  # invited | already_active | refused | kicked | no_stream
     stream: Stream | None = None
     participant: Participant | None = None
+    first_lesson_date: date | None = None
+    course_newly_activated: bool = False
+    course_state: str = ""
+    first_lesson_due_at: datetime | None = None
 
 
 @dataclass
@@ -23,10 +28,16 @@ class JoinOutcome:
     prev_status: ParticipantStatus | None = None
     restored_penalties: int = 0
     participant: Participant | None = None
+    first_join: bool = False
 
 
 async def process_start(
-    session: AsyncSession, *, tg_user_id: int, username: str | None, full_name: str
+    session: AsyncSession,
+    *,
+    tg_user_id: int,
+    username: str | None,
+    full_name: str,
+    occurred_at: datetime | None = None,
 ) -> StartOutcome:
     """`/start` в личке: whitelist-проверка → инвайт-ссылка."""
     stream = await repo.get_active_stream(session)
@@ -41,6 +52,8 @@ async def process_start(
 
     if participant is None:
         return StartOutcome(kind="refused", stream=stream)
+    if participant.status == ParticipantStatus.REVOKED:
+        return StartOutcome(kind="refused", stream=stream, participant=participant)
     if participant.status == ParticipantStatus.KICKED:
         return StartOutcome(kind="kicked", stream=stream, participant=participant)
 
@@ -53,9 +66,37 @@ async def process_start(
         participant.username = username
     await session.commit()
 
-    if participant.status == ParticipantStatus.ACTIVE:
-        return StartOutcome(kind="already_active", stream=stream, participant=participant)
-    return StartOutcome(kind="invited", stream=stream, participant=participant)
+    previous_run = await session.get(CourseRun, participant.id)
+    activated_run = await lessons.activate_course(session, participant, occurred_at or utcnow())
+    run = activated_run or previous_run
+    newly_activated = activated_run is not None and previous_run is None
+    deliveries = await lessons.course_deliveries(session, participant.id) if run is not None else []
+    sent_count = sum(row.status == "sent" for row in deliveries)
+    if sent_count == 33:
+        course_state = "completed"
+    elif participant.status == ParticipantStatus.LEFT:
+        course_state = "paused" if run is not None else "not_enrolled_paused"
+    elif any(row.status in {"sending", "uncertain", "failed"} for row in deliveries):
+        course_state = "blocked"
+    elif newly_activated:
+        course_state = "new"
+    elif run is not None:
+        course_state = "waiting" if sent_count == 0 else "ongoing"
+    else:
+        course_state = ""
+    due = lessons.first_lesson_due_at(run) if run is not None else None
+    first_delivery = next((row for row in deliveries if row.lesson_day == 1), None)
+    if due is not None and first_delivery is not None and first_delivery.retry_at is not None:
+        due = max(due, first_delivery.retry_at)
+    return StartOutcome(
+        kind="already_active" if participant.status == ParticipantStatus.ACTIVE else "invited",
+        stream=stream,
+        participant=participant,
+        first_lesson_date=run.first_delivery_date if run is not None else None,
+        course_newly_activated=newly_activated,
+        course_state=course_state,
+        first_lesson_due_at=due,
+    )
 
 
 async def process_join(
@@ -82,12 +123,13 @@ async def process_join(
         elif participant is not None:
             participant.tg_user_id = tg_user_id
 
-    if participant is None:
+    if participant is None or participant.status == ParticipantStatus.REVOKED:
         return JoinOutcome(activated=False, reason="unknown")
     if participant.status == ParticipantStatus.ACTIVE:
         return JoinOutcome(activated=False, reason="already_active", participant=participant)
 
     prev = participant.status
+    first_join = participant.joined_at is None
     participant.status = ParticipantStatus.ACTIVE
     participant.joined_at = occurred_at or utcnow()
     participant.left_at = None
@@ -106,7 +148,8 @@ async def process_join(
 
     await session.commit()
     return JoinOutcome(
-        activated=True, prev_status=prev, restored_penalties=restored, participant=participant
+        activated=True, prev_status=prev, restored_penalties=restored,
+        participant=participant, first_join=first_join,
     )
 
 

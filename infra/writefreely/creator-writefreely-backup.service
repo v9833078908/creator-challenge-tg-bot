@@ -1,0 +1,15 @@
+[Unit]
+Description=Back up and verify Creator Hero WriteFreely
+After=creator-writefreely.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/creator-writefreely-backup backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/creator-writefreely
+TimeoutStartSec=180

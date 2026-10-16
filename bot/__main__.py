@@ -39,6 +39,8 @@ def run_migrations() -> None:
 
     root = Path(__file__).resolve().parent.parent
     cfg = Config(str(root / "alembic.ini"))
+    # In-process migrations must preserve bot logging configured by main().
+    cfg.attributes["configure_logger"] = False
     cfg.set_main_option("script_location", str(root / "alembic"))
     command.upgrade(cfg, "head")
 
@@ -76,6 +78,7 @@ async def main() -> None:
 
     # Сначала восстанавливаем закрытие прошедших дней, затем запускаем расписание.
     await sched_jobs.recover_missed_days(bot)
+    await sched_jobs.recover_lessons(bot)
     scheduler = AsyncIOScheduler()
     sched_jobs.set_scheduler(scheduler)
     await sched_jobs.register_all_jobs(scheduler, bot)
